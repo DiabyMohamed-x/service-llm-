@@ -1,0 +1,39 @@
+stages:
+  - test
+  - build
+
+# Tests unitaires : aucune clé d'API nécessaire (le service n'appelle pas le LLM dans ces tests).
+test:
+  stage: test
+  image: python:3.12-slim
+  cache:
+    paths:
+      - .cache/pip
+  variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  script:
+    - pip install -r requirements.txt -r requirements-dev.txt
+    - pytest -v
+
+# Build de l'image Docker, puis test de santé du conteneur.
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: tcp://docker:2375
+  script:
+    - docker build -t service-llm:$CI_COMMIT_SHORT_SHA .
+    - docker run -d --name service-llm -p 8000:8000 service-llm:$CI_COMMIT_SHORT_SHA
+    - |
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        if wget -qO- http://docker:8000/health | grep -q '"status":"ok"'; then
+          echo "Service OK"; exit 0
+        fi
+        sleep 2
+      done
+      echo "Le service ne répond pas"; docker logs service-llm; exit 1
+  rules:
+    - if: $CI_COMMIT_BRANCH
